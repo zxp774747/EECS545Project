@@ -2,9 +2,35 @@ import tensorflow as tf
 import os.path
 import os
 from glob import glob
+import struct
 import numpy as np
 from scipy.misc import imsave
 import progressbar
+
+
+def parseIdxFormat(byte_array):
+  assert byte_array[0] == byte_array[1] == '\x00'
+  
+  dtype = None
+  if byte_array[2] == '\x08':
+    dtype = np.uint8
+  elif byte_array[2] == '\x09':
+    dtype = np.int8
+  elif byte_array[2] == '\x0B':
+    dtype = np.int16
+  elif byte_array[2] == '\x0C':
+    dtype = np.int32
+  elif byte_array[2] == '\x0D':
+    dtype = np.float32
+  else:
+    dtype = np.float64
+  
+  n_dim = struct.unpack('>B', byte_array[3])[0]
+  shape = [0] * n_dim
+  for i in xrange(n_dim):
+    shape[i] = struct.unpack('>i', byte_array[4 + 4 * i: 8 + 4 * i])[0]
+  
+  return np.frombuffer(byte_array, dtype, -1, 4 + 4 * n_dim).reshape(shape)
 
 
 def prepareImages(dataset):
@@ -38,36 +64,65 @@ def prepareImages(dataset):
           imsave(os.path.join(root_dir, 'unlabeled', '%05d.jpg' % i), img)
           bar.update(i)
       print '%d Unlabeled images saved to %s' % (n_images, os.path.join(root_dir, 'unlabeled', '*.jpg'))
+  
+  else:
+    # download and extract the dataset
+    if not os.path.exists('train-images-idx3-ubyte.gz'):
+      print 'Downloading mnist..'
+      os.system('wget -c http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz')
+      os.system('wget -c http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz')
+    if not os.path.exists('train-images-idx3-ubyte'):
+      os.system('gunzip train-images-idx3-ubyte.gz')
+    if not os.path.exists('t10k-images-idx3-ubyte'):
+      os.system('gunzip t10k-images-idx3-ubyte.gz')
+
+    # saving images
+    if len(glob(os.path.join(root_dir, 'unlabeled', '*.jpg'))) < 60000:
+      print len(glob(os.path.join(root_dir, 'unlabeled', '*.jpg')))
+      bytes_train = open('./train-images-idx3-ubyte', 'rb').read()
+      X_train = parseIdxFormat(bytes_train)
+      with progressbar.ProgressBar(0, X_train.shape[0]) as bar:
+        for i in xrange(X_train.shape[0]):
+          imsave(os.path.join(root_dir, 'unlabeled', '%05d.jpg' % i), X_train[i])
+          bar.update(i)
+      bytes_test = open('t10k-images-idx3-ubyte', 'rb').read()
+      X_test = parseIdxFormat(bytes_test)
+      with progressbar.ProgressBar(0, X_test.shape[0]) as bar:
+        for i in xrange(X_test.shape[0]):
+          imsave(os.path.join(root_dir, 'unlabeled', '%05d.jpg' % (i + X_train.shape[0])), X_test[i])
+          bar.update(i)
+      print '%d images saved to %s' % (X_train.shape[0] + X_test.shape[0], os.path.join(root_dir, 'unlabeled', '*.jpg')) 
 
 
 def loadData(args):
   # prepare image files
   prepareImages(args.dataset)
-  images_dir = './data/stl10/unlabeled' if args.dataset == 'stl10' else './data/mnist'
+  images_dir = os.path.join('./data', args.dataset, 'unlabeled')
 
-  # glob image files
-  filenames = tf.train.match_filenames_once(os.path.join(images_dir, '*.jpg'), name='filenames')
-  filename_queue = tf.train.string_input_producer(filenames, capacity=5 * args.batch_size, name='filename_queue')
+  with tf.name_scope('InputPipeline'):
+    # glob image files
+    filenames = tf.train.match_filenames_once(os.path.join(images_dir, '*.jpg'), name='filenames')
+    filename_queue = tf.train.string_input_producer(filenames, capacity=5 * args.batch_size, name='filename_queue')
   
-  # read images
-  img_reader = tf.WholeFileReader()
-  (key, value) = img_reader.read(filename_queue)
-  raw_image = tf.cast(tf.image.decode_jpeg(value), tf.float32, name='raw_image')
+    # read images
+    img_reader = tf.WholeFileReader()
+    _, value = img_reader.read(filename_queue)
+    raw_image = tf.cast(tf.image.decode_jpeg(value), tf.float32, name='raw_image')
 
-  # preprocessing
-  if args.dataset == 'stl10':
-    cropped_image = tf.random_crop(raw_image, [args.img_height, args.img_width, args.img_depth], name='cropped_image')
-    image = cropped_image
-  else:
-    pass
+    # preprocessing
+    if args.dataset == 'stl10':
+      cropped_image = tf.random_crop(raw_image, [args.img_height, args.img_width, args.img_depth], name='cropped_image')
+      image = cropped_image
+    else:
+      image = tf.image.resize_images(tf.reshape(raw_image, [28, 28, 1]), [args.img_height, args.img_width])
 
-  # generate batches
-  image_batch = tf.train.shuffle_batch([image], args.batch_size, capacity=4 * args.batch_size, 
-                                       min_after_dequeue=args.batch_size, num_threads=args.n_threads, 
-                                       name='image_batch')
-  real_image_summary = tf.image_summary('real_images', image_batch, max_images=args.batch_size)
+    # generate batches
+    image_batch = tf.train.shuffle_batch([image], args.batch_size, capacity=4 * args.batch_size, 
+                                         min_after_dequeue=args.batch_size, num_threads=args.n_threads, 
+                                         name='image_batch')
+    real_image_summary = tf.image_summary('real_images', image_batch, max_images=4)
                                     
-  return image_batch, real_image_summary
+    return image_batch, real_image_summary
 
 
 if __name__ == '__main__':
