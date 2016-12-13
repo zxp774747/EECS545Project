@@ -67,7 +67,6 @@ def train(args):
             writer.add_summary(summary, global_step)
             bar.update(epoch_step * args.batch_size)
 
-        z_batch = np.random.uniform(-1, 1, [args.batch_size, args.z_dim]).astype(np.float32)
         samples = sess.run(fake_images)
         samples_filename = os.path.join(args.samples_dir, 'samples_%d.png' % epoch)
         visualize(samples, samples_filename)
