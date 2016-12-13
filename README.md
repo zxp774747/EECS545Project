@@ -10,10 +10,10 @@ python main.py -h
 
 ## Training
 
-`
-python main.py --mode train --dataset mnist
+```
+python main.py --mode train --dataset mnist 
 python main.py --mode train --dataset stl10
-`
+```
 
 By the end of each epoch, a model checkpoint is saved to `./checkpoints`, and samples are saved to `./samples`
 
